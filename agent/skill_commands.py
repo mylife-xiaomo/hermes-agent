@@ -80,10 +80,9 @@ def _load_skill_payload(skill_identifier: str, task_id: str | None = None) -> tu
     skill_name = str(loaded_skill.get("name") or normalized)
     skill_path = str(loaded_skill.get("path") or "")
     skill_dir = None
-    # Prefer the absolute skill_dir returned by skill_view() — this is
-    # correct for both local and external skills.  Fall back to the old
-    # SKILLS_DIR-relative reconstruction only when skill_dir is absent
-    # (e.g. legacy skill_view responses).
+    # 优先使用 skill_view() 返回的绝对 skill_dir -- 对本地和外部技能都正确。
+    # 仅当 skill_dir 缺失时（如旧版 skill_view 响应）才回退到
+    # 基于 SKILLS_DIR 的路径重建。
     abs_skill_dir = loaded_skill.get("skill_dir")
     if abs_skill_dir:
         skill_dir = Path(abs_skill_dir)
@@ -132,7 +131,7 @@ def _inject_skill_config(loaded_skill: dict[str, Any], parts: list[str]) -> None
         lines.append("]")
         parts.extend(lines)
     except Exception:
-        pass  # Non-critical — skill still loads without config injection
+        pass  # Non-critical -- skill still loads without config injection
 
 
 def _build_skill_message(
@@ -143,14 +142,23 @@ def _build_skill_message(
     runtime_note: str = "",
     session_id: str | None = None,
 ) -> str:
-    """Format a loaded skill into a user/system message payload."""
+    """【渐进式披露 Tier 2】将加载的技能内容组装为可注入对话的完整消息。
+
+    当 LLM 调用 skill_view(name) 获取到技能数据后，此函数负责：
+    1. 模板变量替换（${HERMES_SKILL_DIR} -> 绝对路径等）
+    2. 内联 Shell 命令展开（!`command` 语法）
+    3. 注入技能目录绝对路径（让 LLM 能引用 scripts/、templates/ 下的文件）
+    4. 注入 config.yaml 中该技能的配置值
+    5. 列出所有关联文件（references/、templates/、scripts/、assets/）
+    6. 附加设置状态提示和用户指令
+    """
     from tools.skills_tool import SKILLS_DIR
 
     content = str(loaded_skill.get("content") or "")
 
-    # ── Template substitution and inline-shell expansion ──
-    # Done before anything else so downstream blocks (setup notes,
-    # supporting-file hints) see the expanded content.
+    # -- 模板变量替换和内联 Shell 展开 --
+    # 必须最先执行，确保后续块（设置提示、关联文件列表）看到的是展开后的内容
+    # 支持的模板变量：${HERMES_SKILL_DIR}、${HERMES_SESSION_ID} 等
     skills_cfg = _load_skills_config()
     if skills_cfg.get("template_vars", True):
         content = _substitute_template_vars(content, skill_dir, session_id)
@@ -160,8 +168,9 @@ def _build_skill_message(
 
     parts = [activation_note, "", content.strip()]
 
-    # ── Inject the absolute skill directory so the agent can reference
-    #    bundled scripts without an extra skill_view() round-trip. ──
+    # -- 注入技能目录的绝对路径 --
+    # 让代理能直接引用 scripts/foo.js、templates/config.yaml 等关联文件，
+    # 而不需要再调用一次 skill_view() 来获取路径
     if skill_dir:
         parts.append("")
         parts.append(f"[Skill directory: {skill_dir}]")
@@ -171,7 +180,9 @@ def _build_skill_message(
             "with the terminal tool using the absolute path."
         )
 
-    # ── Inject resolved skill config values ──
+    # -- 注入从 config.yaml 解析出的技能配置值 --
+    # 如果技能声明了 required_environment_variables 等配置，
+    # 会从用户的 config.yaml 中读取对应值并注入
     _inject_skill_config(loaded_skill, parts)
 
     if loaded_skill.get("setup_skipped"):
@@ -239,7 +250,15 @@ def _build_skill_message(
 
 
 def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
-    """Scan ~/.hermes/skills/ and return a mapping of /command -> skill info.
+    """扫描 ~/.hermes/skills/ 并返回 /command -> 技能信息的映射。
+
+    扫描流程：
+    1. 先扫描本地技能目录 (SKILLS_DIR)
+    2. 再扫描外部技能目录（来自 config.yaml 的 skills.external_dirs）
+    3. 对每个 SKILL.md 解析 frontmatter，提取 name、description
+    4. 过滤掉与当前平台不兼容的技能
+    5. 去重（同名技能只保留先扫描到的）
+    6. 过滤掉被禁用的技能（skills.disabled 配置项）
 
     Returns:
         Dict mapping "/skill-name" to {name, description, skill_md_path, skill_dir}.
@@ -385,14 +404,13 @@ def reload_skills() -> Dict[str, Any]:
 
 
 def resolve_skill_command_key(command: str) -> Optional[str]:
-    """Resolve a user-typed /command to its canonical skill_cmds key.
+    """将用户输入的 /command 解析为规范的 skill_cmds 键。
 
-    Skills are always stored with hyphens — ``scan_skill_commands`` normalizes
-    spaces and underscores to hyphens when building the key. Hyphens and
-    underscores are treated interchangeably in user input: this matches
-    ``_check_unavailable_skill`` and accommodates Telegram bot-command names
-    (which disallow hyphens, so ``/claude-code`` is registered as
-    ``/claude_code`` and comes back in the underscored form).
+    技能始终以连字符形式存储 -- ``scan_skill_commands`` 在构建键时
+    会将空格和下划线标准化为连字符。用户输入中连字符和下划线可
+    互换使用：这与 ``_check_unavailable_skill`` 的行为一致，同时
+    兼容 Telegram bot 命令命名规则（不允许连字符，因此
+    ``/claude-code`` 注册为 ``/claude_code`` 并以下划线形式返回）。
 
     Returns the matching ``/slug`` key from ``get_skill_commands()`` or
     ``None`` if no match.
@@ -409,14 +427,21 @@ def build_skill_invocation_message(
     task_id: str | None = None,
     runtime_note: str = "",
 ) -> Optional[str]:
-    """Build the user message content for a skill slash command invocation.
+    """构建技能斜杠命令调用的用户消息内容。
+
+    当用户在 CLI 或消息平台输入 /skill-name [指令] 时，此函数：
+    1. 查找命令对应的技能信息
+    2. 加载技能完整内容 (_load_skill_payload)
+    3. 通过 _build_skill_message 组装最终消息（含模板替换、配置注入等）
 
     Args:
-        cmd_key: The command key including leading slash (e.g., "/gif-search").
-        user_instruction: Optional text the user typed after the command.
+        cmd_key: 命令键，含前导斜杠（如 "/gif-search"）。
+        user_instruction: 用户在命令后输入的可选文本。
+        task_id: 任务 ID，用于隔离终端/浏览器会话。
+        runtime_note: 运行时附加提示信息。
 
     Returns:
-        The formatted message string, or None if the skill wasn't found.
+        格式化后的消息字符串，若技能未找到则返回 None。
     """
     commands = get_skill_commands()
     skill_info = commands.get(cmd_key)

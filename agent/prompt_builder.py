@@ -719,17 +719,21 @@ def build_skills_system_prompt(
     available_tools: "set[str] | None" = None,
     available_toolsets: "set[str] | None" = None,
 ) -> str:
-    """Build a compact skill index for the system prompt.
+    """【渐进式披露 Tier 1】构建紧凑的技能索引，注入到系统提示中。
 
-    Two-layer cache:
-      1. In-process LRU dict keyed by (skills_dir, tools, toolsets)
-      2. Disk snapshot (``.skills_prompt_snapshot.json``) validated by
-         mtime/size manifest — survives process restarts
+    本函数是技能系统的入口，生成仅包含 "名称: 描述" 的索引列表，
+    不包含技能的完整内容，以最小化 token 消耗。
 
-    Falls back to a full filesystem scan when both layers miss.
+    两层缓存策略：
+      1. 进程内 LRU 缓存：以 (技能目录, 工具集, 平台, 禁用列表) 为 key
+      2. 磁盘快照（.skills_prompt_snapshot.json）：通过 mtime/size 清单验证，
+         进程重启后仍有效
 
-    External skill directories (``skills.external_dirs`` in config.yaml) are
-    scanned alongside the local ``~/.hermes/skills/`` directory.  External dirs
+    两层缓存均未命中时，回退到全量文件系统扫描。
+
+    外部技能目录（config.yaml 中的 skills.external_dirs）与本地
+    ~/.hermes/skills/ 目录一同扫描。外部目录为只读——新技能始终创建在本地目录。
+    本地技能在名称冲突时优先。
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
     """
@@ -739,9 +743,9 @@ def build_skills_system_prompt(
     if not skills_dir.exists() and not external_dirs:
         return ""
 
-    # ── Layer 1: in-process LRU cache ─────────────────────────────────
-    # Include the resolved platform so per-platform disabled-skill lists
-    # produce distinct cache entries (gateway serves multiple platforms).
+    # ── 缓存第一层：进程内 LRU 缓存 ──
+    # 缓存 key 包含平台信息，因为网关可能同时服务多个平台，
+    # 不同平台的禁用技能列表不同，需要独立的缓存条目。
     from gateway.session_context import get_session_env
     _platform_hint = (
         os.environ.get("HERMES_PLATFORM")
@@ -749,6 +753,7 @@ def build_skills_system_prompt(
         or ""
     )
     disabled = get_disabled_skill_names()
+    # 缓存 key = (技能目录, 外部目录, 可用工具, 可用工具集, 平台, 禁用列表)
     cache_key = (
         str(skills_dir.resolve()),
         tuple(str(d) for d in external_dirs),
@@ -760,17 +765,19 @@ def build_skills_system_prompt(
     with _SKILLS_PROMPT_CACHE_LOCK:
         cached = _SKILLS_PROMPT_CACHE.get(cache_key)
         if cached is not None:
-            _SKILLS_PROMPT_CACHE.move_to_end(cache_key)
+            _SKILLS_PROMPT_CACHE.move_to_end(cache_key)  # LRU：移到末尾（最近使用）
             return cached
 
-    # ── Layer 2: disk snapshot ────────────────────────────────────────
+    # ── 缓存第二层：磁盘快照 ──
+    # 从 .skills_prompt_snapshot.json 加载已解析的元数据，
+    # 通过 mtime/size 清单验证文件是否已变更
     snapshot = _load_skills_snapshot(skills_dir)
 
     skills_by_category: dict[str, list[tuple[str, str]]] = {}
     category_descriptions: dict[str, str] = {}
 
     if snapshot is not None:
-        # Fast path: use pre-parsed metadata from disk
+        # 快速路径：使用磁盘快照中已解析的元数据，无需重新扫描文件系统
         for entry in snapshot.get("skills", []):
             if not isinstance(entry, dict):
                 continue
@@ -796,7 +803,7 @@ def build_skills_system_prompt(
             for k, v in (snapshot.get("category_descriptions") or {}).items()
         }
     else:
-        # Cold path: full filesystem scan + write snapshot for next time
+        # 冷启动路径：全量扫描文件系统，然后写入快照供下次使用
         skill_entries: list[dict] = []
         for skill_file in iter_skill_index_files(skills_dir, "SKILL.md"):
             is_compatible, frontmatter, desc = _parse_skill_file(skill_file)
@@ -910,6 +917,10 @@ def build_skills_system_prompt(
                 else:
                     index_lines.append(f"    - {name}")
 
+        # ── 组装最终注入到系统提示中的技能索引 ──
+        # 这里只有 "分类 → 名称: 描述"，没有完整技能内容。
+        # LLM 看到此索引后，会判断哪些技能与当前任务相关，
+        # 然后调用 skill_view(name) 按需加载完整内容（Tier 2）。
         result = (
             "## Skills (mandatory)\n"
             "Before replying, scan the skills below. If a skill matches or is even partially relevant "
@@ -939,7 +950,7 @@ def build_skills_system_prompt(
             "Only proceed without loading a skill if genuinely none are relevant to the task."
         )
 
-    # ── Store in LRU cache ────────────────────────────────────────────
+    # ── 将结果存入 LRU 缓存，下次相同参数直接命中 ──
     with _SKILLS_PROMPT_CACHE_LOCK:
         _SKILLS_PROMPT_CACHE[cache_key] = result
         _SKILLS_PROMPT_CACHE.move_to_end(cache_key)
