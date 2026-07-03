@@ -1466,6 +1466,8 @@ export const ja = defineLocale({
       copyPath: 'パスをコピー',
       removeFromSidebar: 'サイドバーから削除',
       createFailed: 'プロジェクトを作成できませんでした',
+      staleBackend:
+        'プロジェクトを作成するには Hermes バックエンドを更新してください。バックエンドがこのデスクトップアプリより古いです（設定 → 更新 → バックエンド）。',
       deleteConfirm:
         'Hermes から保存済みプロジェクトを削除します。ファイル・git リポジトリ・ワークツリーはそのまま残ります。',
       startWork: '新しいワークツリー',
@@ -1850,7 +1852,6 @@ export const ja = defineLocale({
     flowSubtitles: {
       pkce: 'ブラウザーを開いてサインインし、ここに戻ります',
       device_code: 'ブラウザーで確認ページを開きます — Hermes が自動接続します',
-      loopback: 'サインインのためブラウザーを開きます — Hermes が自動接続します',
       external: 'ターミナルで一度サインインして、チャットに戻ります'
     },
     startingSignIn: provider => `${provider} のサインインを開始中...`,

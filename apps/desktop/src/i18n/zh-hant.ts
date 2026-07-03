@@ -1419,6 +1419,8 @@ export const zhHant = defineLocale({
       copyPath: '複製路徑',
       removeFromSidebar: '從側邊欄移除',
       createFailed: '無法建立專案',
+      staleBackend:
+        '請更新 Hermes 後端以建立專案——目前後端比桌面應用舊（設定 → 更新 → 後端）。',
       deleteConfirm: '這會從 Hermes 中移除已儲存的專案。檔案、git 儲存庫和工作樹維持不變。',
       startWork: '新增工作樹',
       newWorktreeTitle: '新增工作樹',
@@ -1791,7 +1793,6 @@ export const zhHant = defineLocale({
     flowSubtitles: {
       pkce: '開啟瀏覽器登入，然後回到這裡繼續',
       device_code: '在瀏覽器中開啟驗證頁面 — Hermes 會自動連線',
-      loopback: '開啟瀏覽器登入 — Hermes 會自動連線',
       external: '先在終端機登入一次，然後回來繼續聊天'
     },
     startingSignIn: provider => `正在為 ${provider} 啟動登入...`,

@@ -1538,6 +1538,8 @@ export const zh: Translations = {
       copyPath: '复制路径',
       removeFromSidebar: '从侧边栏移除',
       createFailed: '无法创建项目',
+      staleBackend:
+        '请更新 Hermes 后端以创建项目——当前后端比桌面应用旧（设置 → 更新 → 后端）。',
       deleteConfirm: '这会从 Hermes 中移除已保存的项目。文件、git 仓库和工作树保持不变。',
       startWork: '新建工作树',
       newWorktreeTitle: '新建工作树',
@@ -1915,7 +1917,6 @@ export const zh: Translations = {
     flowSubtitles: {
       pkce: '打开浏览器登录，然后回到这里继续',
       device_code: '在浏览器中打开验证页面 — Hermes 会自动连接',
-      loopback: '打开浏览器登录 — Hermes 会自动连接',
       external: '先在终端登录一次，然后回来继续对话'
     },
     startingSignIn: provider => `正在为 ${provider} 启动登录...`,
